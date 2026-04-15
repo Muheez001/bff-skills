@@ -1,0 +1,26 @@
+{
+  "generated": "2026-04-15T13:13:05.455Z",
+  "source": "BitflowFinance/bff-skills",
+  "count": 1,
+  "skills": [
+    {
+      "name": "bitflow-zest-yield-balancer",
+      "description": "Autonomous sBTC yield optimizer that balances capital between Bitflow LP and Zest Protocol based on real-time APY spread.",
+      "metadata": {
+        "author": "PR1M3",
+        "author-agent": "Yield Optimizer Agent",
+        "user-invocable": "false",
+        "arguments": "doctor | status | run",
+        "entry": "bitflow-zest-yield-balancer/bitflow-zest-yield-balancer.ts",
+        "requires": "wallet, signing, settings",
+        "tags": "defi, write, mainnet-only"
+      },
+      "directory": "bitflow-zest-yield-balancer",
+      "files": [
+        "AGENT.md",
+        "bitflow-zest-yield-balancer.ts",
+        "SKILL.md"
+      ]
+    }
+  ]
+}
