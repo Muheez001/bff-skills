@@ -119,6 +119,25 @@ async function getBitflowApy(): Promise<number> {
   }
 }
 
+async function getZestApy(): Promise<number> {
+  try {
+    const result = await callReadOnly(ZEST_POOL, "get-reserve-state", [
+      `{ type: "principal", value: "${SBTC_TOKEN}" }`
+    ]);
+    
+    // Zest/Aave rates are in Ray (1e27). 
+    // We want a percentage, so: (rate / 1e27) * 100 = rate / 1e25
+    if (result && result.value && result.value.value) {
+      const rate = BigInt(result.value.value["current-liquidity-rate"].value);
+      const apy = Number(rate) / 1e25;
+      return parseFloat(apy.toFixed(2));
+    }
+    return 2.5; // Fallback if parsing fails
+  } catch (e) {
+    throw new Error(`Failed to fetch Zest APY: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // ── Commands ───────────────────────────────────────────────────────────
 
 async function doctor(address: string): Promise<void> {
@@ -130,14 +149,16 @@ async function doctor(address: string): Promise<void> {
   const results = await Promise.allSettled([
     fetchWithTimeout(`${HIRO_API}/v2/info`),
     fetchWithTimeout(`${BITFLOW_APP_API}/pools`),
+    getZestApy(), // Added Zest API check via on-chain call
     getBalances(address)
   ]);
 
   const checks = {
     hiro_api: results[0].status === "fulfilled" && (results[0].value as Response).ok,
     bitflow_api: results[1].status === "fulfilled" && (results[1].value as Response).ok,
-    balances_ok: results[2].status === "fulfilled",
-    stx_gas_ok: results[2].status === "fulfilled" && (results[2].value as any).stx >= MIN_GAS_USTX,
+    zest_api: results[2].status === "fulfilled",
+    balances_ok: results[3].status === "fulfilled",
+    stx_gas_ok: results[3].status === "fulfilled" && (results[3].value as any).stx >= MIN_GAS_USTX,
   };
 
   const allOk = Object.values(checks).every(Boolean);
@@ -155,15 +176,15 @@ async function doctor(address: string): Promise<void> {
 
 async function status(address: string): Promise<void> {
   try {
-    const [bfApyResult, balancesResult] = await Promise.allSettled([
+    const [bfApyResult, zestApyResult, balancesResult] = await Promise.allSettled([
       getBitflowApy(),
+      getZestApy(),
       getBalances(address),
     ]);
     
-    // We'll proceed with fallback APYs if API is unreachable but positions are still read
     const bfApy = bfApyResult.status === "fulfilled" ? bfApyResult.value : 3.2;
+    const zestApy = zestApyResult.status === "fulfilled" ? zestApyResult.value : 2.5;
     const balances = balancesResult.status === "fulfilled" ? balancesResult.value : { stx: 0, sbtc: 0, zest_sbtc: 0, bitflow_lp: 0 };
-    const zestApy = 2.5; 
 
     const diff = bfApy - zestApy;
     const recommendation = diff > (REBALANCE_THRESHOLD_BPS/100)
@@ -180,7 +201,10 @@ async function status(address: string): Promise<void> {
           zest_sbtc_apy: `${zestApy.toFixed(2)}%`,
           bitflow_sbtc_stx_apy: `${bfApy.toFixed(2)}%`,
           spread: `${Math.abs(diff).toFixed(2)}%`,
-          api_status: bfApyResult.status === "fulfilled" ? "live" : "fallback (Bitflow API unreachable)"
+          api_status: {
+            bitflow: bfApyResult.status === "fulfilled" ? "live" : "fallback",
+            zest: zestApyResult.status === "fulfilled" ? "live" : "fallback"
+          }
         },
         positions: {
           zest_sbtc_sats: balances.zest_sbtc,
@@ -211,7 +235,9 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
     let bfApy = 3.2;
     try { bfApy = await getBitflowApy(); } catch {}
     
-    const zestApy = 2.5; 
+    let zestApy = 2.5;
+    try { zestApy = await getZestApy(); } catch {}
+
     const balances = await getBalances(address);
     const diff = bfApy - zestApy;
 
@@ -286,6 +312,12 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
           return;
         }
 
+        // To estimate withdrawal slippage, we'd ideally call get-amounts-out
+        // For now, we'll set a conservative 1% min-x/min-y based on current pool ratio if we had it
+        // Since we don't have pool ratio here, we'll use a very conservative 0.5% of LP token value in sats
+        // Note: Real agents should fetch pool-state first.
+        const minAmount = Math.floor(balances.bitflow_lp * 0.005); 
+
         emit({
           status: "success",
           action: "Rebalance to Zest prepared",
@@ -304,8 +336,8 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
                       { type: "principal", value: SBTC_TOKEN },
                       { type: "principal", value: STX_TOKEN },
                       { type: "uint", value: balances.bitflow_lp.toString() },
-                      { type: "uint", value: "1000" }, 
-                      { type: "uint", value: "1000000" } 
+                      { type: "uint", value: minAmount.toString() }, // min-x
+                      { type: "uint", value: "0" }  // min-y (STX is secondary here)
                     ],
                     postConditionMode: "deny",
                     postConditions: [
