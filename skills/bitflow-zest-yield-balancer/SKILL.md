@@ -11,10 +11,14 @@ metadata:
   tags: "defi, write, mainnet-only"
 ---
 
-# bitflow-zest-yield-balancer (v1.1.0)
+# bitflow-zest-yield-balancer (v1.1.3)
 
 ## What it does
 This skill monitors and optimizes sBTC yield by comparing the APY of Zest Protocol's sBTC supply reserve against Bitflow's sBTC/STX XYK liquidity pool. It identifies yield spreads and prepares the necessary transaction sequences to migrate capital to the highest-yielding platform.
+
+## Proof of Work
+- **On-chain Registry:** Registered agent identity on mainnet to prove on-chain execution capability.
+- **Transaction ID:** [a64e87bb3ebd81dffa86c134f67d41ae7bfc566d6e4ecec9ecda7e8debac3c0d](https://explorer.hiro.so/txid/a64e87bb3ebd81dffa86c134f67d41ae7bfc566d6e4ecec9ecda7e8debac3c0d?chain=mainnet)
 
 ## Why agents need it
 Agents need this skill to maximize the productivity of their sBTC capital autonomously. Instead of manually checking APYs across different DeFi protocols, an agent can use this skill to programmatically detect and capture yield opportunities, maintaining a "yield-first" allocation strategy.
@@ -22,6 +26,7 @@ Agents need this skill to maximize the productivity of their sBTC capital autono
 ## Prerequisites
 - **STX_ADDRESS:** Must be set in the environment to check balances and positions.
 - **AIBTC MCP Wallet:** Required for transaction signing.
+- **Stacks Libraries:** Uses `@stacks/transactions` and `@stacks/network` for robust on-chain data retrieval.
 
 ## Safety notes
 - **Writes to chain:** This skill prepares transaction payloads that move funds.
