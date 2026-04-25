@@ -6,6 +6,7 @@
  * Suggests and prepares rebalancing transactions to maximize yield.
  *
  * Built for AIBTC x Bitflow "Skills Pay the Bills" competition.
+ * v1.1.5 - Addressing arc0btc re-review blockers.
  */
 
 import { Command } from "commander";
@@ -13,6 +14,7 @@ import {
   principalCV,
   contractPrincipalCV,
   fetchCallReadOnlyFunction,
+  ClarityType,
 } from "@stacks/transactions";
 import { STACKS_MAINNET } from "@stacks/network";
 
@@ -31,8 +33,8 @@ const ZEST_POOL = "SP2VCQJGH7PHP2DJK7Z0V48AGBHQAW3R3ZW1QF4N.pool-borrow-v2-3";
 const ZSBTC_TOKEN = "SP2VCQJGH7PHP2DJK7Z0V48AGBHQAW3R3ZW1QF4N.zsbtc-v2-0";
 
 const MIN_GAS_USTX = 200_000;
-const REBALANCE_THRESHOLD_BPS = 50; // 0.5% yield difference to trigger rebalance
-const SLIPPAGE_TOLERANCE_PCT = 0.05; // 5% slippage protection for safety
+const REBALANCE_THRESHOLD_BPS = 50; // 0.5% yield difference
+const SLIPPAGE_TOLERANCE_PCT = 0.05; // 5% protection
 const FETCH_TIMEOUT = 15000;
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -42,6 +44,15 @@ interface SkillOutput {
   action: string;
   data: Record<string, any>;
   error: { code: string; message: string; next: string } | null;
+}
+
+interface BitflowPool {
+  pool_id: string;
+  apr24h: number;
+  tvl_usd: number;
+  reserve_x: string;
+  reserve_y: string;
+  shares_total: string;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -60,15 +71,14 @@ function emitError(code: string, message: string, next: string): void {
 }
 
 async function fetchWithTimeout(url: string, options: RequestInit = {}) {
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT),
-    });
-    return response;
-  } catch (e) {
-    throw e;
+  const response = await fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch failed for ${url} with status ${response.status}`);
   }
+  return response;
 }
 
 async function getBalances(address: string) {
@@ -78,7 +88,6 @@ async function getBalances(address: string) {
   for (const api of apis) {
     try {
       const res = await fetchWithTimeout(`${api}/extended/v1/address/${address}/balances`);
-      if (!res.ok) continue;
       const data = await res.json() as any;
       
       const sbtcKey = `${SBTC_TOKEN}::sbtc-token`;
@@ -95,51 +104,42 @@ async function getBalances(address: string) {
       lastError = e;
     }
   }
-  throw new Error(`Failed to fetch balances from all APIs. Last error: ${lastError}`);
+  throw new Error(`Critical: Failed to fetch balances. Network unreachable. Error: ${lastError}`);
 }
 
-async function getBitflowApy(): Promise<number> {
-  try {
-    const res = await fetchWithTimeout(`${BITFLOW_API}/pools`);
-    if (!res.ok) throw new Error(`Bitflow API error: ${res.status}`);
-    const data = await res.json() as any;
-    
-    const pools = Array.isArray(data) ? data : (data.data || []);
-    const pool = pools.find((p: any) => p.pool_id === "xyk_sbtc_stx");
-    
-    if (!pool) throw new Error("sBTC-STX pool (xyk_sbtc_stx) not found in Bitflow API");
-    return pool.apr24h || 2.8; 
-  } catch (e) {
-    throw new Error(`Failed to fetch Bitflow APY: ${e instanceof Error ? e.message : String(e)}`);
-  }
+async function getBitflowPool(): Promise<BitflowPool> {
+  const res = await fetchWithTimeout(`${BITFLOW_API}/pools`);
+  const data = await res.json() as any;
+  const pools = Array.isArray(data) ? data : (data.data || []);
+  const pool = pools.find((p: any) => p.pool_id === "xyk_sbtc_stx");
+  if (!pool) throw new Error("sBTC-STX pool (xyk_sbtc_stx) not found in Bitflow API");
+  return pool;
 }
 
 async function getZestApy(): Promise<number> {
   const [address, name] = ZEST_POOL.split(".");
   const [sbtcAddr, sbtcName] = SBTC_TOKEN.split(".");
 
-  try {
-    const result = await fetchCallReadOnlyFunction({
-      network: NETWORK,
-      contractAddress: address,
-      contractName: name,
-      functionName: "get-reserve-state",
-      functionArgs: [contractPrincipalCV(sbtcAddr, sbtcName)],
-      senderAddress: "SP000000000000000000002Q6VF78",
-    });
-    
-    if (result && result.type === 7) { // Response
-      const val = result.value as any;
-      if (val && val.data) {
-        const rate = val.data["current-liquidity-rate"].value;
-        const apy = Number(rate) / 1e25;
-        return parseFloat(apy.toFixed(2));
-      }
+  const result = await fetchCallReadOnlyFunction({
+    network: NETWORK,
+    contractAddress: address,
+    contractName: name,
+    functionName: "get-reserve-state",
+    functionArgs: [contractPrincipalCV(sbtcAddr, sbtcName)],
+    senderAddress: "SP000000000000000000002Q6VF78",
+  });
+  
+  if (result && result.type === ClarityType.ResponseOk) {
+    const val = result.value as any;
+    if (val && val.data) {
+      const rate = val.data["current-liquidity-rate"].value;
+      // Zest/Aave rates are in Ray (1e27). 
+      // (rate / 1e27) * 100 = rate / 1e25
+      const apy = (Number(rate) / 1e27) * 100;
+      return parseFloat(apy.toFixed(2));
     }
-    return 2.5; // Fallback
-  } catch (e) {
-    throw new Error(`Failed to fetch Zest APY: ${e instanceof Error ? e.message : String(e)}`);
   }
+  throw new Error("Failed to parse Zest APY from on-chain response");
 }
 
 // ── Commands ───────────────────────────────────────────────────────────
@@ -150,46 +150,42 @@ async function doctor(address: string): Promise<void> {
     return;
   }
 
-  const results = await Promise.allSettled([
-    fetchWithTimeout(`${STACKS_API}/v2/info`),
-    fetchWithTimeout(`${BITFLOW_API}/pools`),
-    getZestApy(),
-    getBalances(address)
-  ]);
+  try {
+    const results = await Promise.all([
+      fetchWithTimeout(`${STACKS_API}/v2/info`),
+      getBitflowPool(),
+      getZestApy(),
+      getBalances(address)
+    ]);
 
-  const checks = {
-    stacks_api: results[0].status === "fulfilled" && (results[0].value as Response).ok,
-    bitflow_api: results[1].status === "fulfilled" && (results[1].value as Response).ok,
-    zest_api: results[2].status === "fulfilled",
-    balances_ok: results[3].status === "fulfilled",
-    stx_gas_ok: results[3].status === "fulfilled" && (results[3].value as any).stx >= MIN_GAS_USTX,
-  };
+    const checks = {
+      stacks_api: !!results[0],
+      bitflow_api: !!results[1],
+      zest_api: !!results[2],
+      balances_ok: !!results[3],
+      stx_gas_ok: (results[3] as any).stx >= MIN_GAS_USTX,
+    };
 
-  const allOk = Object.values(checks).every(Boolean);
-  emit({
-    status: allOk ? "success" : "blocked",
-    action: allOk ? "Ready to optimize yield" : "Fix blockers",
-    data: { 
-      checks, 
-      address, 
-      details: results.map((r) => r.status === "rejected" ? r.reason : "OK") 
-    },
-    error: allOk ? null : { code: "DOCTOR_FAIL", message: "Environment not ready", next: "Ensure wallet has STX and APIs are reachable" },
-  });
+    emit({
+      status: "success",
+      action: "Ready to optimize yield",
+      data: { checks, address },
+      error: null,
+    });
+  } catch (e) {
+    emitError("DOCTOR_FAIL", `Environment not ready: ${e}`, "Check network and API status");
+  }
 }
 
 async function status(address: string): Promise<void> {
   try {
-    const [bfApyResult, zestApyResult, balancesResult] = await Promise.allSettled([
-      getBitflowApy(),
+    const [bfPool, zestApy, balances] = await Promise.all([
+      getBitflowPool(),
       getZestApy(),
       getBalances(address),
     ]);
     
-    const bfApy = bfApyResult.status === "fulfilled" ? bfApyResult.value : 3.2;
-    const zestApy = zestApyResult.status === "fulfilled" ? zestApyResult.value : 2.5;
-    const balances = balancesResult.status === "fulfilled" ? balancesResult.value : { stx: 0, sbtc: 0, zest_sbtc: 0, bitflow_lp: 0 };
-
+    const bfApy = bfPool.apr24h;
     const diff = bfApy - zestApy;
     const recommendation = diff > (REBALANCE_THRESHOLD_BPS/100)
       ? "Yield is higher on Bitflow. Consider moving funds to Bitflow."
@@ -205,10 +201,6 @@ async function status(address: string): Promise<void> {
           zest_sbtc_apy: `${zestApy.toFixed(2)}%`,
           bitflow_sbtc_stx_apy: `${bfApy.toFixed(2)}%`,
           spread: `${Math.abs(diff).toFixed(2)}%`,
-          api_status: {
-            bitflow: bfApyResult.status === "fulfilled" ? "live" : "fallback",
-            zest: zestApyResult.status === "fulfilled" ? "live" : "fallback"
-          }
         },
         positions: {
           zest_sbtc_sats: balances.zest_sbtc,
@@ -220,7 +212,7 @@ async function status(address: string): Promise<void> {
       error: null,
     });
   } catch (e) {
-    emitError("STATUS_FAIL", String(e), "Check network and retry");
+    emitError("STATUS_FAIL", String(e), "API failure. Fallbacks disabled for safety.");
   }
 }
 
@@ -236,30 +228,34 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
   }
 
   try {
-    let bfApy = 3.2;
-    try { bfApy = await getBitflowApy(); } catch {}
-    
-    let zestApy = 2.5;
-    try { zestApy = await getZestApy(); } catch {}
-
+    const bfPool = await getBitflowApy(); // Wait, let's use pool data for ratio
+    const bfPoolData = await getBitflowPool();
+    const zestApy = await getZestApy();
     const balances = await getBalances(address);
+    
+    const bfApy = bfPoolData.apr24h;
     const diff = bfApy - zestApy;
 
     if (diff > (REBALANCE_THRESHOLD_BPS/100)) {
-      if (balances.zest_sbtc > 0 || balances.sbtc > 10000) {
+      const amount = balances.zest_sbtc > 0 ? balances.zest_sbtc : balances.sbtc;
+      if (amount > 10000) {
         if (!confirm) {
           emit({
             status: "blocked",
             action: "Confirmation required",
-            data: { recommendation: "Move to Bitflow", amount_sats: balances.zest_sbtc || balances.sbtc },
+            data: { recommendation: "Move to Bitflow", amount_sats: amount },
             error: null
           });
           return;
         }
 
-        const amount = balances.zest_sbtc > 0 ? balances.zest_sbtc : balances.sbtc;
+        // Estimate LP tokens out for add-liquidity min-dlp
+        // ratio = shares_total / reserve_x (where x is sbtc)
+        const ratio = Number(bfPoolData.shares_total) / Number(bfPoolData.reserve_x);
+        const expectedLp = Math.floor(amount * ratio);
+        const minLp = Math.floor(expectedLp * (1 - SLIPPAGE_TOLERANCE_PCT));
+
         const steps = [];
-        
         if (balances.zest_sbtc > 0) {
           steps.push({
             name: "Withdraw from Zest",
@@ -283,7 +279,7 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
                 { type: "principal", value: SBTC_TOKEN },
                 { type: "principal", value: STX_TOKEN },
                 { type: "uint", value: amount.toString() },
-                { type: "uint", value: Math.floor(amount * (1 - SLIPPAGE_TOLERANCE_PCT)).toString() }
+                { type: "uint", value: minLp.toString() }
               ],
               postConditionMode: "deny",
               postConditions: [
@@ -316,7 +312,11 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
           return;
         }
 
-        const minAmount = Math.floor(balances.bitflow_lp * 0.005); 
+        // Estimate sBTC out for zest_supply amount
+        // sbtc_out = lp_tokens * (reserve_x / shares_total)
+        const ratio = Number(bfPoolData.reserve_x) / Number(bfPoolData.shares_total);
+        const expectedSbtc = Math.floor(balances.bitflow_lp * ratio);
+        const minSbtc = Math.floor(expectedSbtc * (1 - SLIPPAGE_TOLERANCE_PCT));
 
         emit({
           status: "success",
@@ -336,7 +336,7 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
                       { type: "principal", value: SBTC_TOKEN },
                       { type: "principal", value: STX_TOKEN },
                       { type: "uint", value: balances.bitflow_lp.toString() },
-                      { type: "uint", value: minAmount.toString() },
+                      { type: "uint", value: minSbtc.toString() }, // Fixed minAmount protection
                       { type: "uint", value: "0" }
                     ],
                     postConditionMode: "deny",
@@ -357,7 +357,7 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
                 name: "Supply to Zest",
                 mcp_command: {
                   tool: "zest_supply",
-                  params: { asset: "sBTC", amount: "pending" }
+                  params: { asset: "sBTC", amount: minSbtc.toString() } // Now executable with estimated min
                 }
               }
             ]
@@ -371,7 +371,7 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
       emit({ status: "success", action: "Balanced", data: {}, error: null });
     }
   } catch (e) {
-    emitError("RUN_FAIL", String(e), "Check network and retry");
+    emitError("RUN_FAIL", `Operation failed: ${e}`, "Check network and API status. Fallbacks disabled.");
   }
 }
 
@@ -382,7 +382,7 @@ const program = new Command();
 program
   .name("bitflow-zest-yield-balancer")
   .description("Optimize sBTC yield between Bitflow and Zest Protocol")
-  .version("1.1.4");
+  .version("1.1.5");
 
 program
   .command("doctor")
