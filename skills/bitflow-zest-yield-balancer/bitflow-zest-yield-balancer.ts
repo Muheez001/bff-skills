@@ -228,7 +228,6 @@ async function run(address: string, action: string, confirm: boolean): Promise<v
   }
 
   try {
-    const bfPool = await getBitflowApy(); // Wait, let's use pool data for ratio
     const bfPoolData = await getBitflowPool();
     const zestApy = await getZestApy();
     const balances = await getBalances(address);

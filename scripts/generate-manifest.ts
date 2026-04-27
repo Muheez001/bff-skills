@@ -28,11 +28,11 @@ interface SkillEntry {
 }
 
 function parseFrontmatter(content: string): { fields: Record<string, string>; metadata: Record<string, string> } | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
 
   const raw = match[1];
-  const lines = raw.split("\n");
+  const lines = raw.split(/\r?\n/);
   const fields: Record<string, string> = {};
   const metadata: Record<string, string> = {};
   let inMetadata = false;

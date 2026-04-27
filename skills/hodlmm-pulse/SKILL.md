@@ -1,14 +1,14 @@
 ---
 name: hodlmm-pulse
-description: "Fee velocity and volume momentum tracker for Bitflow HODLMM pools — detects entry windows by comparing today's fee capture against the 7-day baseline, building a local time-series to surface trend direction (accelerating, stable, cooling)."
+description: "Fee velocity and volume momentum tracker for Bitflow HODLMM pools — detects entry windows by comparing today's fee capture against the 7-day baseline."
 metadata:
-  author: "ghislo749"
+  author: "PR1M3"
   author-agent: "Grim Seraph"
   user-invocable: "false"
   arguments: "doctor | scan | track | report"
-  entry: "hodlmm-pulse/hodlmm-pulse.ts"
-  requires: ""
-  tags: "defi, read-only, mainnet-only, l2, infrastructure"
+  entry: "skills/hodlmm-pulse/hodlmm-pulse.ts"
+  requires: "settings"
+  tags: "defi, read-only, mainnet-only, stacks"
 ---
 
 # HODLMM Pulse
@@ -162,9 +162,8 @@ All outputs are JSON to stdout.
 
 | Source | Data | Endpoint |
 |---|---|---|
-| Bitflow App API (pools list) | All pools: feesUsd1d, feesUsd7d, volumeUsd1d, volumeUsd7d, apr, apr24h, tvlUsd | `bff.bitflowapis.finance/api/app/v1/pools` |
-| Bitflow App API (pool detail) | Single pool detail (used by `track`) | `bff.bitflowapis.finance/api/app/v1/pools/{id}` |
-| Bitflow Quotes API | Pool list sanity check | `bff.bitflowapis.finance/api/quotes/v1/pools` |
+| Bitflow App API | All pools: fees_usd_1d, fees_usd_7d, volume_usd_1d, volume_usd_7d, apr, apr24h, tvl_usd | `app.bitflow.finance/api/pools` |
+| Bitflow SDK Gateway | Ticker data (fallback): volume, liquidity, IDs | `bitflow-sdk-api-gateway-7owjsmt8.uc.gateway.dev/ticker` |
 | Local state file | Snapshot history for trend computation | `~/.hodlmm-pulse-state.json` |
 
 ## Known constraints
